@@ -3,12 +3,20 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /**
-   * Next 15: ganti dari experimental.serverComponentsExternalPackages
-   * ke serverExternalPackages.
-   * Pastikan semua paket di sini hanya dipakai di server (Node.js).
+   * WAJIB untuk Docker / Render / Railway
+   * supaya build Next.js bisa jalan sebagai standalone server
+   */
+  output: "standalone",
+
+  /**
+   * Next 15:
+   * ganti dari experimental.serverComponentsExternalPackages
+   * ke serverExternalPackages
+   * (hanya dipakai di server / Node.js)
    */
   serverExternalPackages: ["pdfkit", "fontkit"],
-  // tambahkan config lainmu di sini bila perlu
+
+  // 👉 config lain kamu aman ditambahkan di sini nanti
 };
 
 export default nextConfig;
