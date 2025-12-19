@@ -1,14 +1,30 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getServiceSupabase } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  // Auth pakai supabase server (RLS user)
-  const sb = await getServerSupabase();
+  // =============================
+  // SUPER ADMIN MODE (BYPASS RLS)
+  // =============================
+  // Next.js 15: cookies() async → wajib await
+  const cookieStore = await cookies();
+  const isSuperAdminMode = cookieStore.get("super_admin")?.value === "1";
+
+  const sb = isSuperAdminMode
+    ? getServiceSupabase()
+    : await getServerSupabase();
+
+  // Auth check tetap dipertahankan agar behavior lama tidak berubah.
+  // Saat super admin mode (service role), sb.auth.getUser() tidak ada session user,
+  // jadi kita validasi pakai getServerSupabase() untuk memastikan user login.
+  const authSb = await getServerSupabase();
   const {
     data: { user },
-  } = await sb.auth.getUser();
+  } = await authSb.auth.getUser();
+
   if (!user) {
     return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
   }

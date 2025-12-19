@@ -1,15 +1,31 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { getServerSupabase } from "@/lib/supabase/server";
+import { getServiceSupabase } from "@/lib/supabase/service";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: { id: string } };
 
 export async function PATCH(req: Request, { params }: Params) {
-  const sb = await getServerSupabase();
+  // =============================
+  // SUPER ADMIN MODE (BYPASS RLS)
+  // =============================
+  const cookieStore = await cookies();
+  const isSuperAdminMode = cookieStore.get("super_admin")?.value === "1";
+
+  // jika super admin mode → bypass RLS, jika tidak → RLS user seperti sebelumnya
+  const sb = isSuperAdminMode
+    ? getServiceSupabase()
+    : await getServerSupabase();
+
+  // Auth check tetap dipertahankan agar behavior lama tidak berubah
+  // (service role tidak punya session user)
+  const authSb = await getServerSupabase();
   const {
     data: { user },
-  } = await sb.auth.getUser();
+  } = await authSb.auth.getUser();
+
   if (!user) {
     return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
   }
@@ -65,10 +81,23 @@ export async function PATCH(req: Request, { params }: Params) {
 }
 
 export async function DELETE(_req: Request, { params }: Params) {
-  const sb = await getServerSupabase();
+  // =============================
+  // SUPER ADMIN MODE (BYPASS RLS)
+  // =============================
+  const cookieStore = await cookies();
+  const isSuperAdminMode = cookieStore.get("super_admin")?.value === "1";
+
+  // jika super admin mode → bypass RLS, jika tidak → RLS user seperti sebelumnya
+  const sb = isSuperAdminMode
+    ? getServiceSupabase()
+    : await getServerSupabase();
+
+  // Auth check tetap dipertahankan agar behavior lama tidak berubah
+  const authSb = await getServerSupabase();
   const {
     data: { user },
-  } = await sb.auth.getUser();
+  } = await authSb.auth.getUser();
+
   if (!user) {
     return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
   }
