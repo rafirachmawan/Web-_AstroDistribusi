@@ -175,6 +175,15 @@ function normalizeDisplayValue(v: any): string {
  * false = kosong → jangan ikut upsert (biar gak nimpah data lama jadi kosong)
  */
 function isMeaningfulValue(dbType: string, display: string, raw: any) {
+  // ✅ model_grid: jangan timpa kalau kosong
+  if (dbType === "model_grid") {
+    if (Array.isArray(raw)) return raw.length > 0;
+    if (typeof raw === "object" && raw) return Object.keys(raw).length > 0;
+
+    const s = String(display ?? "").trim();
+    return s !== "" && s !== "[]" && s !== "{}";
+  }
+
   // invoice / po_delay: string/json, kalau benar2 kosong -> false
   if (dbType === "invoice" || dbType === "po_delay") {
     const s = String(raw ?? "");
@@ -359,9 +368,20 @@ export async function POST(req: NextRequest) {
         else if (t === "invoice") dbType = "invoice";
         else if (t === "po_delay") dbType = "po_delay";
         else if (t === "cycle_table") dbType = "text";
+        else if (t === "model_grid") dbType = "model_grid"; // ✅ NEW
         else dbType = "text";
 
-        const display = normalizeDisplayValue(v.value);
+        // ✅ NEW: model_grid disimpan sebagai JSON string rapi
+        const display =
+          t === "model_grid"
+            ? (() => {
+                try {
+                  return JSON.stringify(v.value ?? []);
+                } catch {
+                  return "[]";
+                }
+              })()
+            : normalizeDisplayValue(v.value);
 
         // ✅ kalau kosong, jangan ikut upsert (biar gak nimpah data lama)
         if (!isMeaningfulValue(dbType, display, v.value)) return null;

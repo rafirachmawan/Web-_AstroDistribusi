@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import {
   LockKeyhole,
@@ -28,6 +28,7 @@ type FieldBase = {
   group_label?: string | null;
   group_order?: number | null;
 };
+
 type FieldRadio = FieldBase & { type: "radio"; options: string[] };
 type FieldCheckbox = FieldBase & { type: "checkbox"; options: string[] };
 type FieldNumber = FieldBase & {
@@ -40,7 +41,13 @@ type FieldText = FieldBase & { type: "text"; placeholder?: string };
 type FieldCurrency = FieldBase & { type: "currency"; placeholder?: string };
 type FieldInvoice = FieldBase & { type: "invoice" };
 type FieldImage = FieldBase & { type: "image" }; // upload foto
-type FieldCycleTable = FieldBase & { type: "cycle_table" }; // ⬅️ NEW
+type FieldCycleTable = FieldBase & { type: "cycle_table" }; // penugasan cycle count
+
+// ✅ NEW: GRID MODEL (tabel/grid dinamis)
+type FieldGrid = FieldBase & {
+  type: "grid";
+  options: string[]; // dipakai sebagai daftar kolom
+};
 
 type Field =
   | FieldRadio
@@ -50,7 +57,8 @@ type Field =
   | FieldCurrency
   | FieldInvoice
   | FieldImage
-  | FieldCycleTable; // ⬅️ NEW
+  | FieldCycleTable
+  | FieldGrid;
 
 export type ChecklistSection = {
   id: string;
@@ -58,7 +66,6 @@ export type ChecklistSection = {
   idx?: number;
   period?: "daily" | "weekly" | "monthly";
   fields: Field[];
-  // ⬇️ NEW: daftar tanggal (YYYY-MM-DD) ketika section ini dibuka (KHUSUS weekly)
   weekly_open?: string[];
 };
 
@@ -110,8 +117,8 @@ function titleCase(input: string): string {
     w ? w[0].toLocaleUpperCase("id-ID") + w.slice(1) : "";
   return input
     .toLocaleLowerCase("id-ID")
-    .split(/\s+/) // pisah per spasi
-    .map((word) => word.split("-").map(cap).join("-")) // "tulungagung-kota"
+    .split(/\s+/)
+    .map((word) => word.split("-").map(cap).join("-"))
     .join(" ");
 }
 
@@ -142,16 +149,16 @@ function asOptions(f: any): string[] {
 // === PO Delay detector: treat as special JSON list ===
 const isPoDelay = (f: any) => {
   const mark = String(f?.placeholder ?? f?.label ?? "");
-  return (
-    /po[-\s]?delay/i.test(mark) || // "PO Delay"
-    /po.*belum.*datang/i.test(mark) // "PO yang belum datang ..."
-  );
+  return /po[-\s]?delay/i.test(mark) || /po.*belum.*datang/i.test(mark);
 };
 
 const isCycleTable = (f: any) =>
   String(f?.type ?? "").toLowerCase() === "cycle_table";
 const isImageField = (f: any) =>
   String(f?.type ?? "").toLowerCase() === "image";
+
+// ✅ NEW: GRID DETECTOR
+const isGridField = (f: any) => String(f?.type ?? "").toLowerCase() === "grid";
 
 // Field "daftar" untuk model cetak (pakai text multi+)
 const normDate = (s: string) => String(s || "").slice(0, 10);
@@ -178,11 +185,11 @@ function buildEmptyFormFromSections(sections: ChecklistSection[]) {
       } else if (isPoDelay(f)) {
         init[s.id][(f as any).id] = [];
       } else if (isCycleTable(f)) {
-        // cycle_table disimpan sebagai STRING (encode baris)
         init[s.id][(f as any).id] = "";
       } else if (isImageField(f)) {
-        // image simpan URL string
         init[s.id][(f as any).id] = "";
+      } else if (isGridField(f)) {
+        init[s.id][(f as any).id] = []; // ✅ grid disimpan sebagai array row
       } else if (isMultiField(f)) {
         init[s.id][(f as any).id] = [];
       } else if (t === "checkbox") {
@@ -268,6 +275,164 @@ function FieldInput({
   const fid = (f as any)?.id || f.id;
   const muted = disabled ? "opacity-60 pointer-events-none" : "";
 
+  // ✅✅✅ NEW: GRID MODEL (tabel)
+  if ((f as any).type === "grid") {
+    type Row = Record<string, string>;
+    const cols = asOptions(f);
+    const list: Row[] = Array.isArray(val) ? val : [];
+
+    const ensureCols = (r: Row) => {
+      const next: Row = {};
+      for (const c of cols) next[c] = String(r?.[c] ?? "");
+      return next;
+    };
+
+    const safeList = list.map(ensureCols);
+
+    const setCell = (rowIdx: number, col: string, v: string) => {
+      if (disabled) return;
+      const next = [...safeList];
+      next[rowIdx] = { ...(next[rowIdx] ?? {}), [col]: v };
+      setVal(secId, fid, next);
+    };
+
+    const addRow = () => {
+      if (disabled) return;
+      const empty: Row = {};
+      for (const c of cols) empty[c] = "";
+      setVal(secId, fid, [...safeList, empty]);
+    };
+
+    const removeRow = (idx: number) => {
+      if (disabled) return;
+      const next = safeList.filter((_, i) => i !== idx);
+      setVal(secId, fid, next);
+    };
+
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          {!hideLabel && (
+            <label className="text-sm font-medium text-black">
+              {f.label}
+              {(f as any).help && (
+                <span className="ml-2 text-xs text-black/60">
+                  {(f as any).help}
+                </span>
+              )}
+            </label>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
+              {safeList.length} baris
+            </span>
+            {canDesign && (
+              <div className="flex items-center gap-2 no-print">
+                <button
+                  onClick={onEdit}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs text-black hover:bg-slate-50"
+                  title="Edit field"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-100"
+                  title="Hapus field"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {cols.length === 0 ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            Field grid ini belum punya kolom (options kosong). Edit field dan
+            isi opsi kolom.
+          </div>
+        ) : (
+          <div
+            className={`overflow-x-auto rounded-xl border border-slate-300 ${muted}`}
+          >
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th className="border border-slate-300 px-2 py-1 w-[44px] text-center">
+                    No
+                  </th>
+                  {cols.map((c) => (
+                    <th
+                      key={c}
+                      className="border border-slate-300 px-2 py-1 text-left text-[11px] md:text-xs font-semibold text-slate-700"
+                    >
+                      {c}
+                    </th>
+                  ))}
+                  <th className="border border-slate-300 px-2 py-1 w-[56px]"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {safeList.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={cols.length + 2}
+                      className="border border-slate-300 px-3 py-2 text-xs text-slate-500"
+                    >
+                      Belum ada baris. Klik <b>Tambah Baris</b>.
+                    </td>
+                  </tr>
+                ) : (
+                  safeList.map((row, ridx) => (
+                    <tr key={ridx}>
+                      <td className="border border-slate-300 px-2 py-1 text-center text-[11px] text-slate-600">
+                        {ridx + 1}
+                      </td>
+                      {cols.map((c) => (
+                        <td
+                          key={c}
+                          className="border border-slate-300 px-1 py-1"
+                        >
+                          <input
+                            value={String(row?.[c] ?? "")}
+                            onChange={(e) => setCell(ridx, c, e.target.value)}
+                            className="w-full rounded-md border border-slate-200 px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </td>
+                      ))}
+                      <td className="border border-slate-300 px-1 py-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => removeRow(ridx)}
+                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs hover:bg-slate-50"
+                          title="Hapus baris"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="no-print">
+          <button
+            type="button"
+            onClick={addRow}
+            disabled={disabled || cols.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+          >
+            <Plus className="h-3 w-3" /> Tambah Baris
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- IMAGE: upload foto ----------
   if ((f as any).type === "image") {
     const url: string = typeof val === "string" ? val : "";
@@ -278,11 +443,9 @@ function FieldInput({
 
       const filePath = `checklist/${fid}/${Date.now()}-${file.name}`;
 
-      const { data, error } = await supabase.storage
+      const { error } = await supabase.storage
         .from("monitoring-photos")
         .upload(filePath, file);
-
-      console.log("UPLOAD RESULT:", { data, error });
 
       if (error) {
         alert("Gagal upload foto: " + error.message);
@@ -330,7 +493,6 @@ function FieldInput({
           )}
         </div>
 
-        {/* Preview foto */}
         {url && (
           <div className="max-w-xs">
             <img
@@ -360,19 +522,15 @@ function FieldInput({
     );
   }
 
-  // ---------- CYCLE TABLE: Penugasan Cycle Count (Gudang / PIC / Principal) ----------
+  // ---------- CYCLE TABLE: Penugasan Cycle Count ----------
   if ((f as any).type === "cycle_table") {
     type Row = { gudang: string; pic: string; principal: string };
 
     const raw: string = typeof val === "string" ? val : "";
 
-    // parsing string -> { rows, deadline }
     const parseValue = (rawVal: string): { rows: Row[]; deadline: string } => {
       if (!rawVal) {
-        return {
-          rows: [{ gudang: "", pic: "", principal: "" }],
-          deadline: "",
-        };
+        return { rows: [{ gudang: "", pic: "", principal: "" }], deadline: "" };
       }
 
       const lines = rawVal
@@ -395,27 +553,18 @@ function FieldInput({
         }
       }
 
-      if (rows.length === 0) {
-        rows.push({ gudang: "", pic: "", principal: "" });
-      }
-
+      if (rows.length === 0) rows.push({ gudang: "", pic: "", principal: "" });
       return { rows, deadline };
     };
 
     const { rows, deadline } = parseValue(raw);
 
     const encodeValue = (rowsVal: Row[], deadlineVal: string) => {
-      // JANGAN di-filter, simpan semua baris (termasuk yang masih kosong)
       const lineRows = rowsVal.map(
         (r) => `${r.gudang ?? ""} | ${r.pic ?? ""} | ${r.principal ?? ""}`
       );
-
       const lines = [...lineRows];
-
-      if (deadlineVal) {
-        lines.push(`Deadline Laporan Jam : ${deadlineVal}`);
-      }
-
+      if (deadlineVal) lines.push(`Deadline Laporan Jam : ${deadlineVal}`);
       return lines.join("\n");
     };
 
@@ -438,12 +587,14 @@ function FieldInput({
     const removeRow = (idx: number) => {
       if (disabled) return;
       const next = rows.filter((_, i) => i !== idx);
-      handleRowsChange(next, deadline);
+      handleRowsChange(
+        next.length ? next : [{ gudang: "", pic: "", principal: "" }],
+        deadline
+      );
     };
 
     return (
       <div className="flex flex-col gap-2">
-        {/* Header label + tombol edit/hapus */}
         <div className="flex items-center justify-between">
           {!hideLabel && (
             <label className="text-sm font-medium text-black">
@@ -475,7 +626,6 @@ function FieldInput({
           )}
         </div>
 
-        {/* Tabel Penugasan */}
         <div
           className={`overflow-x-auto rounded-xl border border-slate-300 ${
             disabled ? "opacity-60 pointer-events-none" : ""
@@ -493,7 +643,6 @@ function FieldInput({
                 <th className="border border-slate-300 px-2 py-1 w-1/3 text-left text-[11px] md:text-xs font-semibold bg-slate-50 text-slate-700">
                   PRINCIPAL
                 </th>
-
                 <th className="border border-slate-300 px-1 py-1 w-[32px]"></th>
               </tr>
             </thead>
@@ -543,7 +692,6 @@ function FieldInput({
           </table>
         </div>
 
-        {/* Tombol tambah baris */}
         <div className="mt-2 flex items-center gap-2 text-xs">
           <button
             type="button"
@@ -555,7 +703,6 @@ function FieldInput({
           </button>
         </div>
 
-        {/* Deadline laporan jam */}
         <div className="mt-2 flex items-center gap-2 text-xs">
           <span>Deadline Laporan Jam :</span>
           <input
@@ -570,214 +717,199 @@ function FieldInput({
     );
   }
 
-  // ---------- PENUGASAN CYCLE COUNT (Gudang / PIC / PRINCIPAL + Deadline) ----------
-  // if (isCycleAssign(f))
-  //   if ((f as any).type === "invoice") {
-  //     /* ---------- NEW: INVOICE (tabel) ---------- */
-  //     type Row = {
-  //       nomor: string;
-  //       customer: string;
-  //       jumlah: string;
-  //       alasan: string;
-  //     };
-  //     const list: Row[] = Array.isArray(val) ? val : [];
+  // ---------- INVOICE: tabel ----------
+  if ((f as any).type === "invoice") {
+    type Row = {
+      nomor: string;
+      customer: string;
+      jumlah: string;
+      alasan: string;
+    };
+    const list: Row[] = Array.isArray(val) ? val : [];
 
-  //     const addRow = () => {
-  //       if (disabled) return;
-  //       const next = [
-  //         ...list,
-  //         { nomor: "", customer: "", jumlah: "0", alasan: "" },
-  //       ];
-  //       setVal(secId, fid, next);
-  //       requestAnimationFrame(() => {
-  //         const el = document.querySelector<HTMLInputElement>(
-  //           `[data-fid="${fid}"][data-r="${next.length - 1}"][data-c="nomor"]`
-  //         );
-  //         el?.focus();
-  //       });
-  //     };
+    const addRow = () => {
+      if (disabled) return;
+      const next = [
+        ...list,
+        { nomor: "", customer: "", jumlah: "0", alasan: "" },
+      ];
+      setVal(secId, fid, next);
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLInputElement>(
+          `[data-fid="${fid}"][data-r="${next.length - 1}"][data-c="nomor"]`
+        );
+        el?.focus();
+      });
+    };
 
-  //     const removeRow = (idx: number) => {
-  //       if (disabled) return;
-  //       setVal(
-  //         secId,
-  //         fid,
-  //         list.filter((_, i) => i !== idx)
-  //       );
-  //     };
+    const removeRow = (idx: number) => {
+      if (disabled) return;
+      setVal(
+        secId,
+        fid,
+        list.filter((_, i) => i !== idx)
+      );
+    };
 
-  //     const setCell = (idx: number, patch: Partial<Row>) => {
-  //       if (disabled) return;
-  //       const next = [...list];
-  //       next[idx] = { ...next[idx], ...patch };
-  //       setVal(secId, fid, next);
-  //     };
+    const setCell = (idx: number, patch: Partial<Row>) => {
+      if (disabled) return;
+      const next = [...list];
+      next[idx] = { ...next[idx], ...patch };
+      setVal(secId, fid, next);
+    };
 
-  //     const total = list.reduce(
-  //       (a, r) => a + Number(String(r.jumlah || "0").replace(/[^\d]/g, "")),
-  //       0
-  //     );
+    const total = list.reduce(
+      (a, r) => a + Number(String(r.jumlah || "0").replace(/[^\d]/g, "")),
+      0
+    );
 
-  //     const cellCls =
-  //       "border border-slate-300 px-2 py-1 text-sm bg-white focus-within:bg-white";
-  //     const headCls =
-  //       "border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 bg-slate-50";
+    const cellCls =
+      "border border-slate-300 px-2 py-1 text-sm bg-white focus-within:bg-white";
+    const headCls =
+      "border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 bg-slate-50";
 
-  //     return (
-  //       <div className="flex flex-col gap-2">
-  //         {/* Judul + aksi kanan */}
-  //         <div className="flex items-center justify-between">
-  //           {!hideLabel && (
-  //             <label className="text-sm font-medium text-black">
-  //               {f.label}
-  //               {(f as any).help && (
-  //                 <span className="ml-2 text-xs text-black/60">
-  //                   {(f as any).help}
-  //                 </span>
-  //               )}
-  //             </label>
-  //           )}
-  //           <div className="flex items-center gap-2">
-  //             <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
-  //               {list.length} faktur
-  //             </span>
-  //             {canDesign && (
-  //               <>
-  //                 <button
-  //                   onClick={onEdit}
-  //                   className="no-print rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs text-black hover:bg-slate-50"
-  //                   title="Edit field"
-  //                 >
-  //                   <Pencil className="h-3 w-3" />
-  //                 </button>
-  //                 <button
-  //                   onClick={onDelete}
-  //                   className="no-print rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-100"
-  //                   title="Hapus field"
-  //                 >
-  //                   <Trash2 className="h-3 w-3" />
-  //                 </button>
-  //               </>
-  //             )}
-  //           </div>
-  //         </div>
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          {!hideLabel && (
+            <label className="text-sm font-medium text-black">
+              {f.label}
+              {(f as any).help && (
+                <span className="ml-2 text-xs text-black/60">
+                  {(f as any).help}
+                </span>
+              )}
+            </label>
+          )}
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
+              {list.length} faktur
+            </span>
+            {canDesign && (
+              <>
+                <button
+                  onClick={onEdit}
+                  className="no-print rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs text-black hover:bg-slate-50"
+                  title="Edit field"
+                >
+                  <Pencil className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="no-print rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs text-rose-700 hover:bg-rose-100"
+                  title="Hapus field"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </>
+            )}
+          </div>
+        </div>
 
-  //         {/* Tabel */}
-  //         <div
-  //           className={`rounded-xl border border-slate-300 ${
-  //             disabled ? "opacity-60 pointer-events-none" : ""
-  //           }`}
-  //         >
-  //           {/* Header */}
-  //           <div className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]">
-  //             <div className={headCls}>Nomor Faktur</div>
-  //             <div className={headCls}>Nama Customer</div>
-  //             <div className={headCls}>Jumlah</div>
-  //             <div className={headCls}>Alasan</div>
-  //             <div className={headCls}>Aksi</div>
-  //           </div>
+        <div
+          className={`rounded-xl border border-slate-300 ${
+            disabled ? "opacity-60 pointer-events-none" : ""
+          }`}
+        >
+          <div className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]">
+            <div className={headCls}>Nomor Faktur</div>
+            <div className={headCls}>Nama Customer</div>
+            <div className={headCls}>Jumlah</div>
+            <div className={headCls}>Alasan</div>
+            <div className={headCls}>Aksi</div>
+          </div>
 
-  //           {/* Rows */}
-  //           {list.length === 0 ? (
-  //             <div className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]">
-  //               <div className="col-span-5 border border-slate-300 border-t-0 px-3 py-2 text-xs text-slate-500">
-  //                 Belum ada data. Klik <b>Tambah Faktur</b> untuk menambah
-  //                 baris.
-  //               </div>
-  //             </div>
-  //           ) : (
-  //             list.map((row, idx) => (
-  //               <div
-  //                 key={idx}
-  //                 className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]"
-  //               >
-  //                 {/* Nomor */}
-  //                 <div className={cellCls}>
-  //                   <input
-  //                     data-fid={fid}
-  //                     data-r={idx}
-  //                     data-c="nomor"
-  //                     value={row.nomor}
-  //                     onChange={(e) => setCell(idx, { nomor: e.target.value })}
-  //                     placeholder="IKK-25100689"
-  //                     className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-  //                   />
-  //                 </div>
+          {list.length === 0 ? (
+            <div className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]">
+              <div className="col-span-5 border border-slate-300 border-t-0 px-3 py-2 text-xs text-slate-500">
+                Belum ada data. Klik <b>Tambah Faktur</b> untuk menambah baris.
+              </div>
+            </div>
+          ) : (
+            list.map((row, idx) => (
+              <div
+                key={idx}
+                className="grid grid-cols-[200px_minmax(160px,1fr)_140px_minmax(160px,1fr)_56px]"
+              >
+                <div className={cellCls}>
+                  <input
+                    data-fid={fid}
+                    data-r={idx}
+                    data-c="nomor"
+                    value={row.nomor}
+                    onChange={(e) => setCell(idx, { nomor: e.target.value })}
+                    placeholder="IKK-25100689"
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-  //                 {/* Customer */}
-  //                 <div className={cellCls}>
-  //                   <input
-  //                     value={row.customer}
-  //                     onChange={(e) =>
-  //                       setCell(idx, { customer: e.target.value })
-  //                     }
-  //                     placeholder="DUA PUTRI - UDANAWU"
-  //                     className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-  //                   />
-  //                 </div>
+                <div className={cellCls}>
+                  <input
+                    value={row.customer}
+                    onChange={(e) => setCell(idx, { customer: e.target.value })}
+                    placeholder="DUA PUTRI - UDANAWU"
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-  //                 {/* Jumlah */}
-  //                 <div className={cellCls}>
-  //                   <input
-  //                     value={formatCurrency(row.jumlah)}
-  //                     inputMode="numeric"
-  //                     onChange={(e) =>
-  //                       setCell(idx, {
-  //                         jumlah: e.target.value.replace(/[^\d]/g, ""),
-  //                       })
-  //                     }
-  //                     placeholder="0"
-  //                     className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none text-right focus:ring-2 focus:ring-blue-500"
-  //                   />
-  //                 </div>
+                <div className={cellCls}>
+                  <input
+                    value={formatCurrency(row.jumlah)}
+                    inputMode="numeric"
+                    onChange={(e) =>
+                      setCell(idx, {
+                        jumlah: e.target.value.replace(/[^\d]/g, ""),
+                      })
+                    }
+                    placeholder="0"
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none text-right focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-  //                 {/* Alasan */}
-  //                 <div className={cellCls}>
-  //                   <input
-  //                     value={row.alasan}
-  //                     onChange={(e) => setCell(idx, { alasan: e.target.value })}
-  //                     placeholder="ADA RETUR / TUTUP"
-  //                     className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-  //                   />
-  //                 </div>
+                <div className={cellCls}>
+                  <input
+                    value={row.alasan}
+                    onChange={(e) => setCell(idx, { alasan: e.target.value })}
+                    placeholder="ADA RETUR / TUTUP"
+                    className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
 
-  //                 {/* Aksi */}
-  //                 <div className="flex items-center justify-center border border-slate-300">
-  //                   <button
-  //                     type="button"
-  //                     onClick={() => removeRow(idx)}
-  //                     className="m-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-black hover:bg-slate-50"
-  //                     title="Hapus baris"
-  //                   >
-  //                     <X className="h-3 w-3" />
-  //                   </button>
-  //                 </div>
-  //               </div>
-  //             ))
-  //           )}
-  //         </div>
+                <div className="flex items-center justify-center border border-slate-300">
+                  <button
+                    type="button"
+                    onClick={() => removeRow(idx)}
+                    className="m-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-black hover:bg-slate-50"
+                    title="Hapus baris"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
 
-  //         {/* Toolbar bawah */}
-  //         <div className="mt-2 flex items-center justify-between">
-  //           <button
-  //             type="button"
-  //             onClick={addRow}
-  //             disabled={disabled}
-  //             className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60"
-  //           >
-  //             <Plus className="h-3 w-3" /> Tambah Faktur
-  //           </button>
+        <div className="mt-2 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={addRow}
+            disabled={disabled}
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-60"
+          >
+            <Plus className="h-3 w-3" /> Tambah Faktur
+          </button>
 
-  //           <div className="text-xs text-black/70">
-  //             Total:{" "}
-  //             <span className="font-semibold">{formatCurrency(total)}</span>
-  //           </div>
-  //         </div>
-  //       </div>
-  //     );
-  //   }
+          <div className="text-xs text-black/70">
+            Total:{" "}
+            <span className="font-semibold">{formatCurrency(total)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  // ---------- NEW: PO DELAY (baris: principal + hari) ----------
+  // ---------- NEW: PO DELAY ----------
   if (isPoDelay(f)) {
     type Row = { principal: string; days: number };
     const list: Row[] = Array.isArray(val) ? val : [];
@@ -803,7 +935,6 @@ function FieldInput({
 
     return (
       <div className="flex flex-col gap-2">
-        {/* Header: label + aksi (edit/hapus) */}
         <div className="flex items-center justify-between">
           {!hideLabel && (
             <label className="text-sm font-medium text-black">
@@ -836,7 +967,6 @@ function FieldInput({
           )}
         </div>
 
-        {/* Body */}
         <div
           className={`rounded-xl border border-slate-200 ${
             disabled ? "opacity-60 pointer-events-none" : ""
@@ -852,7 +982,6 @@ function FieldInput({
                 key={i}
                 className="grid grid-cols-[1fr_180px_60px] gap-2 border-t border-slate-100 p-3"
               >
-                {/* Prinsipal */}
                 <input
                   value={r.principal}
                   onChange={(e) => patch(i, { principal: e.target.value })}
@@ -860,7 +989,6 @@ function FieldInput({
                   className="rounded-md border border-slate-200 px-3 py-2 text-sm"
                 />
 
-                {/* Hari */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-600">sudah lebih</span>
                   <input
@@ -874,7 +1002,6 @@ function FieldInput({
                   <span className="text-xs text-slate-600">hari</span>
                 </div>
 
-                {/* Hapus baris */}
                 <div className="flex items-center justify-end">
                   <button
                     type="button"
@@ -890,7 +1017,6 @@ function FieldInput({
           )}
         </div>
 
-        {/* Toolbar bawah */}
         <div className="no-print">
           <button
             type="button"
@@ -1061,7 +1187,6 @@ function FieldInput({
           )}
         </div>
 
-        {/* KIRI parts, KANAN keterangan */}
         <div className="md:grid md:grid-cols-[1fr_360px] gap-10">
           <div className="flex flex-col gap-4">
             {comboParts.map((p: ComboKind) => (
@@ -1392,7 +1517,6 @@ function PrintModelPrincipal({
   return (
     <div className="text-[11px] leading-[1.25] text-black">
       {sections.map((sec) => {
-        // ambil field multi text yang ditandai untuk model
         const modelFields = (sec.fields ?? []).filter(isPrincipalModel);
         if (modelFields.length === 0) return null;
 
@@ -1407,8 +1531,6 @@ function PrintModelPrincipal({
                 ? form[sec.id][f.id]
                 : [];
 
-              // keterangan (jika satu grup sama-seperti UI kanan) – ambil text dengan group_order=99
-              // kalau tidak ada, abaikan
               let noteId: string | null = null;
               if (Array.isArray(sec.fields)) {
                 const sameGroup = sec.fields.filter(
@@ -1432,10 +1554,8 @@ function PrintModelPrincipal({
                         key={i}
                         className="grid grid-cols-[18px_1fr_220px] gap-8 items-start mb-3"
                       >
-                        {/* Nomor */}
                         <div className="text-right pr-1">{i + 1}</div>
 
-                        {/* Deskripsi + Note kecil */}
                         <div>
                           <div className="font-medium">
                             {txt || "____________________________"}
@@ -1448,7 +1568,6 @@ function PrintModelPrincipal({
                           ) : null}
                         </div>
 
-                        {/* Kolom kanan: "Keterangan:" + garis-bergaris */}
                         <div>
                           <div className="text-[10px] mb-1">Keterangan:</div>
                           <div className="h-[1px] bg-black/70" />
@@ -1470,25 +1589,8 @@ function PrintModelPrincipal({
   );
 }
 
-// ==== DETEKTOR FIELD PENUGASAN CYCLE COUNT (GUDANG / PIC / PRINCIPAL) ====
-const isCycleAssign = (f: any) => {
-  if (!f) return false;
-  const t = String(f.type ?? "").toLowerCase();
-  // kita simpan di DB sebagai "text"
-  if (t !== "text") return false;
-
-  const mark = `${f.label ?? ""} ${f.placeholder ?? ""}`.toLowerCase();
-  return (
-    mark.includes("penugasan cycle count") ||
-    mark.includes("cycle count") ||
-    mark.includes("cycle_assign")
-  );
-};
-
-// ==== Utils (letakkan di atas, bersama fungsi util lain) ====
-// ==== Utils: detektor field "model penerimaan barang dari prinsipal" ====
+// ==== DETEKTOR FIELD "model penerimaan barang dari prinsipal" ====
 export const isPrincipalModel = (f: any) => {
-  // hanya untuk text yang multi+
   const isMultiText =
     String(f?.type) === "text" &&
     String(f?.placeholder || "")
@@ -1496,7 +1598,6 @@ export const isPrincipalModel = (f: any) => {
       .includes("multi+");
   if (!isMultiText) return false;
 
-  // cek label/placeholder berisi penanda model
   const mark = `${f?.label ?? ""} ${f?.placeholder ?? ""}`.toLowerCase();
   return (
     mark.includes("penerimaan barang dari prinsipal") ||
@@ -1525,11 +1626,13 @@ export default function ChecklistClient({
   );
   const [form, setForm] = useState<Record<string, Record<string, any>>>({});
 
-  // Jadwal (diatur Super Admin)
   const [schedules, setSchedules] = useState<{
     weekly: string[];
     monthly: string[];
-  }>({ weekly: [], monthly: [] });
+  }>({
+    weekly: [],
+    monthly: [],
+  });
 
   /* Role */
   const ROLE_OPTIONS = [
@@ -1556,29 +1659,20 @@ export default function ChecklistClient({
         setMyRole(rk);
         setRoleView((prev) => prev ?? rk);
 
-        // --- Prefill Leader dari profile.full_name → username email → ""
         const leaderName =
           j?.profile?.full_name ||
           (j?.user?.email ? String(j.user.email).split("@")[0] : "") ||
           "";
-
         setLeader((prev) => prev || titleCase(leaderName));
-
-        // --- Depo default (sesuai permintaan)
         setDepo((prev) => prev || titleCase("tulungagung"));
       } catch {
-        // fallback kalau whoami gagal
         setDepo((prev) => prev || titleCase("tulungagung"));
       }
     })();
   }, []);
 
-  // === NEW: editor whitelist tanggal untuk section (weekly only) ===
   async function editSectionWeeklyOpen(sec: ChecklistSection) {
-    // nilai sekarang
     const cur = (sec.weekly_open ?? []).join(", ");
-
-    // prompt user; kosongkan untuk ikut jadwal global
     const raw =
       window.prompt(
         `Tanggal dibuka KHUSUS untuk section "${sec.title}" (YYYY-MM-DD, pisahkan dengan koma).\n` +
@@ -1586,7 +1680,6 @@ export default function ChecklistClient({
         cur
       ) ?? cur;
 
-    // normalisasi -> array 'YYYY-MM-DD'
     const list = (raw || "")
       .split(",")
       .map((s) => normDate(s.trim()))
@@ -1599,12 +1692,12 @@ export default function ChecklistClient({
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
         },
-        body: JSON.stringify({ weekly_open: list }), // <— kirim weekly_open
+        body: JSON.stringify({ weekly_open: list }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) return alert(j?.error || "Gagal menyimpan tanggal section");
 
-      await refreshSections(sec.id); // muat ulang agar state weekly_open terbaru
+      await refreshSections(sec.id);
       alert("Tanggal khusus section tersimpan.");
     } catch {
       alert("Gagal menyimpan tanggal section (client).");
@@ -1628,7 +1721,6 @@ export default function ChecklistClient({
     return role;
   }
 
-  // Load jadwal per-role
   async function loadSchedules() {
     try {
       const role = await pickRole();
@@ -1641,12 +1733,12 @@ export default function ChecklistClient({
       const j = await r.json().catch(() => null);
       const weekly = Array.isArray(j?.weekly) ? j.weekly.map(anyToYMD) : [];
       const monthly = Array.isArray(j?.monthly) ? j.monthly.map(anyToYMD) : [];
-
       setSchedules({ weekly, monthly });
     } catch {
       setSchedules({ weekly: [], monthly: [] });
     }
   }
+
   useEffect(() => {
     if (roleView || myRole) loadSchedules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1666,12 +1758,8 @@ export default function ChecklistClient({
   const goNext = () => setCurrentIdx((i) => safeIdx(i + 1));
   const jumpTo = (i: number) => setCurrentIdx(safeIdx(i));
 
-  // ===== NEW: izinkan reorder section (hanya daily + super mode) =====
   const canReorderSections = Boolean(canDesign && activePeriod === "daily");
 
-  /* Init form mengikuti sections */
-  /* Init form mengikuti sections */
-  /* Init form mengikuti sections */
   useEffect(() => {
     if (!Array.isArray(sections) || sections.length === 0) {
       setForm({});
@@ -1680,7 +1768,6 @@ export default function ChecklistClient({
     setForm(buildEmptyFormFromSections(sections));
   }, [sections]);
 
-  /* LOAD SECTIONS */
   async function refreshSections(
     newlyCreatedId?: string,
     roleOverride?: string
@@ -1730,7 +1817,6 @@ export default function ChecklistClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleView, myRole, activePeriod]);
 
-  /* LOAD VALUES */
   async function loadSaved() {
     if (!Array.isArray(sections) || sections.length === 0) return;
     const roleKey = (roleView || myRole || "").trim();
@@ -1740,8 +1826,6 @@ export default function ChecklistClient({
       depo: depo ?? "",
       period: activePeriod,
     });
-
-    // ⬇️ TAMBAH INI (biar load data sesuai role)
     if (roleKey) qs.set("role_key", roleKey);
 
     const res = await fetch(`${FORM_API}?${qs}`, { cache: "no-store" });
@@ -1765,7 +1849,6 @@ export default function ChecklistClient({
       const t = (fld as any).type as Field["type"];
 
       if (String((fld as any).type) === "invoice") {
-        // invoice: simpan di value_text (JSON array)
         let arr: any[] = [];
         try {
           const parsed = JSON.parse(String(v.value_text ?? "[]"));
@@ -1773,7 +1856,6 @@ export default function ChecklistClient({
         } catch {}
         next[v.section_id][v.field_id] = arr;
       } else if (isPoDelay(fld)) {
-        // PO delay: JSON array di value_text
         let arr: any[] = [];
         try {
           const parsed = JSON.parse(String(v.value_text ?? "[]"));
@@ -1781,17 +1863,22 @@ export default function ChecklistClient({
         } catch {}
         next[v.section_id][v.field_id] = arr;
       } else if (isCycleTable(fld)) {
-        // cycle_table: STRING encode baris (bukan JSON)
         next[v.section_id][v.field_id] = String(v.value_text ?? "");
       } else if (isImageField(fld)) {
-        // image: URL string
         next[v.section_id][v.field_id] = String(v.value_text ?? "");
+      } else if (isGridField(fld)) {
+        // ✅ grid disimpan sebagai JSON array
+        let arr: any[] = [];
+        try {
+          const parsed = JSON.parse(String(v.value_text ?? "[]"));
+          if (Array.isArray(parsed)) arr = parsed;
+        } catch {}
+        next[v.section_id][v.field_id] = arr;
       } else if (isMultiNumber(fld) || isMultiCurrency(fld)) {
         next[v.section_id][v.field_id] = [v.value_number ?? 0];
       } else if (isMultiText(fld)) {
         next[v.section_id][v.field_id] = [v.value_text ?? ""];
       } else if (String((fld as any).type || "").includes("+")) {
-        // ✅ COMBO: value_text berisi JSON object
         const rawText = String(v.value_text ?? "");
         try {
           const obj = JSON.parse(rawText);
@@ -1800,7 +1887,6 @@ export default function ChecklistClient({
               ? obj
               : { note: rawText };
         } catch {
-          // fallback kalau data lama masih string note
           next[v.section_id][v.field_id] = { note: rawText };
         }
       } else if (t === "checkbox") {
@@ -1823,16 +1909,15 @@ export default function ChecklistClient({
       json.form?.leader ? titleCase(json.form.leader) : prev
     );
     setDepo((prev) => (json.form?.depo ? titleCase(json.form.depo) : prev));
-
     setForm((prev) => ({ ...prev, ...next }));
   }
+
   const secLen = sections?.length ?? 0;
   useEffect(() => {
     loadSaved();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, depo, secLen, activePeriod, roleView, myRole]);
 
-  /* Derived counters */
   const totalFields = useMemo(
     () =>
       Array.isArray(sections)
@@ -1850,19 +1935,6 @@ export default function ChecklistClient({
         const fid = (f as any).id;
         const v = form[s.id]?.[fid];
 
-        // // khusus Penugasan Cycle Count
-        // if (isCycleAssign(f)) {
-        //   const rows: any[] = Array.isArray(v) ? v : [];
-        //   const hasRow = rows.some(
-        //     (r) =>
-        //       String(r?.gudang ?? "").trim() !== "" ||
-        //       String(r?.pic ?? "").trim() !== "" ||
-        //       String(r?.principal ?? "").trim() !== ""
-        //   );
-        //   if (hasRow) c++;
-        //   continue;
-        // }
-
         if (Array.isArray(v)) {
           let any = false;
 
@@ -1874,6 +1946,13 @@ export default function ChecklistClient({
                   String(row?.customer ?? "").trim() !== "" ||
                   String(row?.alasan ?? "").trim() !== "" ||
                   Number(String(row?.jumlah ?? "0")) > 0)
+            );
+          } else if (isGridField(f)) {
+            // ✅ grid dianggap terisi bila ada salah satu sel terisi
+            any = (v as any[]).some((row: any) =>
+              row && typeof row === "object"
+                ? Object.values(row).some((x) => String(x ?? "").trim() !== "")
+                : false
             );
           } else {
             any = (v as any[]).some((x) =>
@@ -1917,14 +1996,10 @@ export default function ChecklistClient({
   const setVal = (secId: string, fieldId: string, raw: any) => {
     setForm((prev) => ({
       ...prev,
-      [secId]: {
-        ...(prev[secId] ?? {}),
-        [fieldId]: raw,
-      },
+      [secId]: { ...(prev[secId] ?? {}), [fieldId]: raw },
     }));
   };
 
-  /* Jadwal: hitung terkunci / tidak */
   const isAllowedToday = (period: Period, d: string) => {
     const ds = normDate(d);
     if (period === "daily") return true;
@@ -1932,150 +2007,29 @@ export default function ChecklistClient({
     if (period === "monthly") return schedules.monthly.includes(ds);
     return true;
   };
-  const lockedGlobal = !isAllowedToday(activePeriod, date);
-  const lockedFor = (sec?: ChecklistSection) => {
-    if (activePeriod === "weekly") {
-      return lockedGlobal || !isAllowedWeeklySection(date, sec);
-    }
-    return lockedGlobal;
-  };
 
-  // ⬇️ NEW: validasi weekly per-section
+  const lockedGlobal = !isAllowedToday(activePeriod, date);
+
   const isAllowedWeeklySection = (dateStr: string, sec?: ChecklistSection) => {
     const ds = normDate(dateStr);
-    // wajib lolos jadwal weekly global dulu
     if (!schedules.weekly.includes(ds)) return false;
-    // kalau section punya whitelist tanggal, wajib termasuk
     if (sec?.weekly_open && sec.weekly_open.length > 0) {
       return sec.weekly_open.includes(ds);
     }
-    // kalau tidak ada whitelist: ikut global
     return true;
   };
 
-  /* SAVE form */
-  /* SAVE form */
-  async function saveForm() {
-    const sec = sections[currentIdx];
-    const isAllowedToday = (period: Period, d: string) => {
-      const ds = normDate(d);
-      if (period === "daily") return true;
-      if (period === "weekly") return schedules.weekly.includes(ds);
-      if (period === "monthly") return schedules.monthly.includes(ds);
-      return true;
-    };
-    const lockedGlobal = !isAllowedToday(activePeriod, date);
-    const isAllowedWeeklySection = (
-      dateStr: string,
-      sec?: ChecklistSection
-    ) => {
-      const ds = normDate(dateStr);
-      if (!schedules.weekly.includes(ds)) return false;
-      if (sec?.weekly_open && sec.weekly_open.length > 0) {
-        return sec.weekly_open.includes(ds);
-      }
-      return true;
-    };
-    const lockedFor = (sec?: ChecklistSection) => {
-      if (activePeriod === "weekly") {
-        return lockedGlobal || !isAllowedWeeklySection(date, sec);
-      }
-      return lockedGlobal;
-    };
-
-    if (lockedFor(sec)) {
-      alert("Section ini terkunci untuk tanggal ini.");
-      return;
-    }
-
-    const values: Array<{
-      section_id: string;
-      field_id: string;
-      type: string;
-      value: string | number;
-    }> = [];
-
-    for (const s of sections ?? []) {
-      for (const f of s.fields ?? []) {
-        const fieldId = (f as any).id;
-        const raw = form[s.id]?.[fieldId];
-        const t = (f as any).type as Field["type"];
-
-        let val: string | number;
-
-        if (String((f as any).type) === "invoice") {
-          val = JSON.stringify(Array.isArray(raw) ? raw : []);
-        } else if (isPoDelay(f)) {
-          val = JSON.stringify(Array.isArray(raw) ? raw : []);
-        } else if (isCycleTable(f)) {
-          // cycle_table simpan STRING (encode)
-          val = String(raw ?? "");
-        } else if (isImageField(f)) {
-          // image simpan URL string
-          val = String(raw ?? "");
-        } else if (Array.isArray(raw)) {
-          // multi number/currency/text/checkbox lama
-          val =
-            t === "text" || t === "checkbox"
-              ? (raw as string[])
-                  .map((x) => String(x || "").trim())
-                  .filter(Boolean)
-                  .join(" | ")
-              : (raw as any[]).reduce((a, b) => a + (Number(b) || 0), 0);
-        } else if (t === "currency") {
-          val = Number(String(raw ?? "0").replace(/[^\d]/g, ""));
-        } else if (t === "number") {
-          val = Number(raw ?? 0);
-        } else if (String((f as any).type || "").includes("+")) {
-          // ✅ COMBO: simpan semua part (radio/checkbox/number/text/currency + note) sebagai JSON
-          val = JSON.stringify(
-            raw && typeof raw === "object" && !Array.isArray(raw)
-              ? raw
-              : { note: String(raw ?? "") }
-          );
-        } else {
-          val = String(raw ?? "");
-        }
-
-        values.push({
-          section_id: s.id,
-          field_id: fieldId,
-          type: (f as any).type,
-          value: val,
-        });
-      }
-    }
-
-    const payload = {
-      form_date: date,
-      depo: (depo ?? "").trim(),
-      leader: (leader ?? "").trim(),
-      period: activePeriod,
-      role_key: roleView || myRole || null, // ⬅️ TAMBAHKAN INI
-      values,
-    } as const;
-
-    if (!payload.form_date) return alert("Tanggal wajib diisi.");
-    if (!payload.leader) return alert("Leader wajib diisi.");
-    if (!payload.depo) return alert("Depo wajib diisi.");
-
-    const res = await fetch(FORM_API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) return alert(j?.error || "Gagal menyimpan");
-    alert("Tersimpan!");
-  }
+  const lockedFor = (sec?: ChecklistSection) => {
+    if (activePeriod === "weekly")
+      return lockedGlobal || !isAllowedWeeklySection(date, sec);
+    return lockedGlobal;
+  };
 
   async function saveAllAndReset() {
-    // validasi header
     if (!date) return alert("Tanggal wajib diisi.");
     if (!leader) return alert("Leader wajib diisi.");
     if (!depo) return alert("Depo wajib diisi.");
 
-    // siapkan array values
     const values: Array<{
       section_id: string;
       field_id: string;
@@ -2099,6 +2053,9 @@ export default function ChecklistClient({
           val = String(raw ?? "");
         } else if (isImageField(f)) {
           val = String(raw ?? "");
+        } else if (isGridField(f)) {
+          // ✅ grid: simpan JSON array
+          val = JSON.stringify(Array.isArray(raw) ? raw : []);
         } else if (Array.isArray(raw)) {
           if (t === "text" || t === "checkbox") {
             val = (raw as string[])
@@ -2113,7 +2070,6 @@ export default function ChecklistClient({
         } else if (t === "number") {
           val = Number(raw ?? 0);
         } else if (String(t || "").includes("+")) {
-          // ✅ COMBO: simpan sebagai JSON utuh
           val = JSON.stringify(
             raw && typeof raw === "object" && !Array.isArray(raw)
               ? raw
@@ -2132,7 +2088,6 @@ export default function ChecklistClient({
       }
     }
 
-    // kirim ke API yang sama
     const res = await fetch(FORM_API, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2141,25 +2096,20 @@ export default function ChecklistClient({
         depo: depo.trim(),
         leader: leader.trim(),
         period: activePeriod,
-        role_key: roleView || myRole || null, // ⬅️ TAMBAHKAN INI
+        role_key: roleView || myRole || null,
         values,
       }),
     });
 
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return alert(j?.error || "Gagal menyimpan semua checklist");
-    }
+    if (!res.ok) return alert(j?.error || "Gagal menyimpan semua checklist");
 
-    // ✅ sukses → reset
     setForm(buildEmptyFormFromSections(sections));
-    alert("Tersimpan dan form di-reset ✅");
-
     alert("Tersimpan dan form di-reset ✅");
   }
 
-  /* Super admin auth */
   const [superBusy, setSuperBusy] = useState(false);
+
   async function enableSuperAdmin() {
     const pwd = window.prompt("Masukkan password Super Admin");
     if (!pwd) return;
@@ -2177,6 +2127,7 @@ export default function ChecklistClient({
       setSuperBusy(false);
     }
   }
+
   async function disableSuperAdmin() {
     setSuperBusy(true);
     try {
@@ -2187,7 +2138,6 @@ export default function ChecklistClient({
     }
   }
 
-  /* Editor Jadwal */
   async function openScheduleEditor() {
     try {
       const role = await pickRole();
@@ -2234,81 +2184,13 @@ export default function ChecklistClient({
         }
       );
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        alert(j?.error || "Gagal menyimpan jadwal");
-        return;
-      }
+      if (!res.ok) return alert(j?.error || "Gagal menyimpan jadwal");
 
       setSchedules({
         weekly: weeklyStr.map(anyToYMD),
         monthly: monthlyStr.map(anyToYMD),
       });
-
       alert("Jadwal tersimpan.");
-    } catch {
-      alert("Gagal menyimpan jadwal (client).");
-    }
-  }
-
-  async function openScheduleEditorFor(
-    period: "weekly" | "monthly",
-    role: string
-  ) {
-    try {
-      const currentStr =
-        period === "weekly" ? schedules.weekly : schedules.monthly;
-      const promptLabel =
-        period === "weekly"
-          ? "Tanggal MINGGUAN yang dibuka (YYYY-MM-DD, pisahkan dengan koma):"
-          : "Tanggal BULANAN yang dibuka (YYYY-MM-DD, pisahkan dengan koma):";
-
-      const cur = currentStr.join(", ");
-      const raw = window.prompt(promptLabel, cur) ?? cur;
-
-      const pickedStr = raw
-        .split(",")
-        .map((s) => normDate(s.trim()))
-        .filter(Boolean);
-      const pickedInts = pickedStr.map(dateStrToInt).filter(Boolean);
-
-      const body =
-        period === "weekly"
-          ? {
-              weekly: pickedInts,
-              monthly: schedules.monthly.map(dateStrToInt).filter(Boolean),
-            }
-          : {
-              weekly: schedules.weekly.map(dateStrToInt).filter(Boolean),
-              monthly: pickedInts,
-            };
-
-      const res = await fetch(
-        `${SCHEDULES_API}?role=${encodeURIComponent(role)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      );
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) return alert(j?.error || "Gagal menyimpan jadwal");
-
-      setSchedules({
-        weekly:
-          period === "weekly"
-            ? pickedStr.map(anyToYMD)
-            : schedules.weekly.map(anyToYMD),
-        monthly:
-          period === "monthly"
-            ? pickedStr.map(anyToYMD)
-            : schedules.monthly.map(anyToYMD),
-      });
-
-      alert(
-        period === "weekly"
-          ? "Jadwal mingguan tersimpan."
-          : "Jadwal bulanan tersimpan."
-      );
     } catch {
       alert("Gagal menyimpan jadwal (client).");
     }
@@ -2316,7 +2198,7 @@ export default function ChecklistClient({
 
   const handlePrint = () => window.print();
 
-  /* ========== CRUD section & field ========== */
+  /* ========== CRUD section & field (tetap sama, lanjutkan dari kode kamu) ========== */
   async function createOne(payload: any) {
     const res = await fetch(FIELDS_API, {
       method: "POST",
@@ -2402,45 +2284,43 @@ export default function ChecklistClient({
     if (targetIndex < 0 || targetIndex >= groupArr.length) return;
 
     const A = groupArr[curIndex];
-    {
-      const B = groupArr[targetIndex];
-      const idxA = A.orderIndex;
-      const idxB = B.orderIndex;
+    const B = groupArr[targetIndex];
+    const idxA = A.orderIndex;
+    const idxB = B.orderIndex;
 
-      try {
-        const patchAll: Promise<any>[] = [];
+    try {
+      const patchAll: Promise<any>[] = [];
 
-        A.items.forEach((f: any, i: number) => {
-          patchAll.push(
-            fetch(`${FIELDS_API}/${f.id}`, {
-              method: "PATCH",
-              headers: {
-                "Content-Type": "application/json",
-                "Cache-Control": "no-store",
-              },
-              body: JSON.stringify({ idx: idxB + i }),
-            })
-          );
-        });
+      A.items.forEach((f: any, i: number) => {
+        patchAll.push(
+          fetch(`${FIELDS_API}/${f.id}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store",
+            },
+            body: JSON.stringify({ idx: idxB + i }),
+          })
+        );
+      });
 
-        B.items.forEach((f: any, i: number) => {
-          patchAll.push(
-            fetch(`${FIELDS_API}/${f.id}`, {
-              method: "PATCH",
-              headers: {
-                "Content-Type": "application/json",
-                "Cache-Control": "no-store",
-              },
-              body: JSON.stringify({ idx: idxA + i }),
-            })
-          );
-        });
+      B.items.forEach((f: any, i: number) => {
+        patchAll.push(
+          fetch(`${FIELDS_API}/${f.id}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "Cache-Control": "no-store",
+            },
+            body: JSON.stringify({ idx: idxA + i }),
+          })
+        );
+      });
 
-        await Promise.all(patchAll);
-        await refreshSections(sectionId);
-      } catch {
-        alert("Gagal mengubah urutan item.");
-      }
+      await Promise.all(patchAll);
+      await refreshSections(sectionId);
+    } catch {
+      alert("Gagal mengubah urutan item.");
     }
   }
 
@@ -2468,8 +2348,9 @@ export default function ChecklistClient({
         "text",
         "currency",
         "invoice",
-        "image", // ⬅️ ini yang baru
+        "image",
         "cycle_table",
+        "grid", // ✅ NEW
       ].includes(t)
     ) {
       throw new Error(`Tipe tidak didukung: ${type}`);
@@ -2508,6 +2389,20 @@ export default function ChecklistClient({
       payload.options = options;
     }
 
+    if (t === "grid") {
+      const raw =
+        window.prompt(
+          `Kolom GRID (pisah dengan "|")\nContoh: Nama Barang|Qty|Keterangan`,
+          "Kolom 1|Kolom 2|Kolom 3"
+        ) || "";
+      const cols = raw
+        .split("|")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (cols.length === 0) throw new Error("Kolom grid tidak boleh kosong");
+      payload.options = cols; // ✅ simpan kolom di options
+    }
+
     if (t === "number") {
       const suffix = window.prompt("Suffix (opsional, contoh: pcs)", "") || "";
       const min = window.prompt("Min (opsional)", "") || "";
@@ -2522,7 +2417,6 @@ export default function ChecklistClient({
       payload.placeholder = ph || null;
     }
 
-    // t === "image" tidak butuh pengaturan tambahan
     return payload;
   }
 
@@ -2607,6 +2501,7 @@ export default function ChecklistClient({
 - invoice         (list faktur: nomor, customer, jumlah, alasan)
 - image           (Upload foto)
 - cycle_table     (Penugasan Cycle Count: Gudang / PIC / Principal + Deadline)
+- grid            (MODEL GRID/TABEL - kolom dari options, isi berupa baris)
 - text+           (Text multi item dengan tombol +)
 - po_delay        (PO yang belum datang > Tanggal Permintaan Datang)
 - model_principal (Model "Penerimaan Barang dari Prinsipal")
@@ -2617,51 +2512,11 @@ export default function ChecklistClient({
     const inputRaw = typeRaw.trim().toLowerCase();
     if (!inputRaw) return;
 
-    // ======== FIELD KHUSUS: Penugasan Cycle Count ========
-    if (inputRaw === "cycle_assign") {
-      const label =
-        window.prompt(
-          "Judul field penugasan cycle count:",
-          "Penugasan Cycle Count Hari Ini"
-        ) || "Penugasan Cycle Count Hari Ini";
-
-      const gk = uid();
-
-      // field utama: ditandai placeholder "model:cycle"
-      await createOne({
-        section_id: sectionId,
-        type: "text",
-        label,
-        help: null,
-        group_key: gk,
-        group_label: label,
-        group_order: 1,
-        placeholder: "model:cycle_count",
-      });
-
-      // otomatis tawarkan Keterangan di kanan
-      if (window.confirm('Tambahkan field "Keterangan" di sebelah kanan?')) {
-        const ketPayload = await promptPartPayload(sectionId, "text", {
-          group_key: gk,
-          group_label: label,
-          order: 99,
-          defaultLabel: "Keterangan",
-        });
-        await createOne(ketPayload);
-      }
-
-      await refreshSections(sectionId);
-      return;
-    }
-
     const isTextPlus = inputRaw === "text+";
     const isModel = inputRaw === "model_principal" || inputRaw === "model";
 
-    // ======== JALUR KHUSUS: MODEL PRINSIPAL ========
     if (isModel) {
       const gk = uid();
-
-      // Field daftar (multi+) dengan penanda "model:prinsipal"
       const daftarPayload = {
         section_id: sectionId,
         type: "text",
@@ -2673,7 +2528,6 @@ export default function ChecklistClient({
         placeholder: "multi+ model:prinsipal",
       };
 
-      // Field keterangan di kolom kanan (order 99)
       const ketPayload = {
         section_id: sectionId,
         type: "text",
@@ -2691,7 +2545,6 @@ export default function ChecklistClient({
       return;
     }
 
-    // ======== JALUR UMUM ========
     const parts = (isTextPlus ? "text" : inputRaw)
       .split("+")
       .map((s) => s.trim())
@@ -2705,7 +2558,8 @@ export default function ChecklistClient({
       "currency",
       "invoice",
       "image",
-      "cycle_table", // ⬅️ NEW
+      "cycle_table",
+      "grid", // ✅ NEW
       "po_delay",
       "model_principal",
       "model",
@@ -2713,22 +2567,21 @@ export default function ChecklistClient({
 
     if (!parts.every((p) => allowed.has(p))) {
       return alert(
-        "Tipe tidak valid. Pakai: radio | checkbox | number | text | currency | invoice | image | po_delay | model_principal. Khusus multi text gunakan: text+"
+        "Tipe tidak valid. Pakai: radio | checkbox | number | text | currency | invoice | image | cycle_table | grid | po_delay | model_principal. Khusus multi text gunakan: text+"
       );
     }
 
-    // ===== single part =====
     if (parts.length === 1) {
       const label = (window.prompt("Label field:", "Nama field") || "").trim();
       if (!label) return alert("Label wajib diisi");
 
       const wantNote =
         parts[0] !== "invoice" &&
-        parts[0] !== "image" && // image tidak perlu keterangan otomatis
+        parts[0] !== "image" &&
         window.confirm('Tambahkan "Keterangan" (text) di sebelah field ini?');
+
       const gk = wantNote ? uid() : undefined;
 
-      // Map po_delay → text + placeholder default
       const createType = parts[0] === "po_delay" ? "text" : parts[0];
 
       const p1 = await promptPartPayload(sectionId, createType, {
@@ -2738,9 +2591,8 @@ export default function ChecklistClient({
         defaultLabel: label,
       });
 
-      if (parts[0] === "po_delay" && !p1.placeholder) {
+      if (parts[0] === "po_delay" && !p1.placeholder)
         p1.placeholder = "PO Delay";
-      }
 
       if (isTextPlus && p1.type === "text") {
         const ph = String(p1.placeholder ?? "");
@@ -2765,7 +2617,6 @@ export default function ChecklistClient({
       return;
     }
 
-    // ===== COMBO =====
     const groupTitle = (
       window.prompt("Judul/label grup:", "Nama Grup") || ""
     ).trim();
@@ -2830,6 +2681,17 @@ export default function ChecklistClient({
         .filter(Boolean);
     }
 
+    if (String(f.type) === "grid") {
+      const existing = asOptions(f).join("|");
+      const raw =
+        window.prompt('Ubah kolom GRID (pisah dengan "|"):', existing) ??
+        existing;
+      patch.options = raw
+        .split("|")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+
     const res = await fetch(`${FIELDS_API}/${(f as any).id}`, {
       method: "PATCH",
       headers: {
@@ -2856,7 +2718,6 @@ export default function ChecklistClient({
     await refreshSections(sectionId);
   }
 
-  // Helper label grup
   function getGroupLabel(arr: any[]): string {
     const first: any = arr?.[0] ?? {};
     return (first.group_label ?? first.label ?? "").toString();
@@ -2957,6 +2818,7 @@ export default function ChecklistClient({
                 <Plus className="h-4 w-4" /> Section
               </button>
             )}
+
             <button
               onClick={saveAllAndReset}
               className="inline-flex items-center gap-2 rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
@@ -2986,9 +2848,7 @@ export default function ChecklistClient({
               return (
                 <button
                   key={k}
-                  onClick={() => {
-                    setActivePeriod(k);
-                  }}
+                  onClick={() => setActivePeriod(k)}
                   className={
                     "inline-flex items-center gap-2 rounded-2xl px-3 py-1.5 text-sm ring-1 transition " +
                     (active
@@ -3031,7 +2891,6 @@ export default function ChecklistClient({
             {(sections ?? []).map((s, i) => {
               const active = i === currentIdx;
               const lockedThis = lockedFor(s);
-
               return (
                 <div key={s.id} className="flex items-center gap-1">
                   <button
@@ -3080,7 +2939,8 @@ export default function ChecklistClient({
         {sections?.[currentIdx] ? (
           (() => {
             const sec = sections[currentIdx];
-            const lockedSec = lockedFor(sec); // ⬅️ tambahkan baris ini
+            const lockedSec = lockedFor(sec);
+
             return (
               <section
                 key={sec.id}
@@ -3105,7 +2965,7 @@ export default function ChecklistClient({
                     >
                       <Plus className="h-3 w-3" /> Field
                     </button>
-                    {/* === NEW: atur whitelist tanggal khusus section (weekly only) === */}
+
                     {activePeriod === "weekly" && (
                       <button
                         onClick={() => editSectionWeeklyOpen(sec)}
@@ -3115,6 +2975,7 @@ export default function ChecklistClient({
                         Tanggal Section
                       </button>
                     )}
+
                     <button
                       onClick={() =>
                         deleteSection({ id: sec.id, title: sec.title })
@@ -3150,7 +3011,6 @@ export default function ChecklistClient({
 
                 <div className="grid gap-5">
                   {(() => {
-                    // Bentuk groups
                     const groups: Record<string, any[]> = {};
                     for (const f of sec.fields ?? []) {
                       const key = (f as any).group_key || (f as any).id;
@@ -3158,7 +3018,6 @@ export default function ChecklistClient({
                       groups[key].push(f);
                     }
 
-                    // Urut grup
                     const orderedGroups = Object.values(groups)
                       .map((arr) => {
                         const sorted = [...arr].sort(
@@ -3178,7 +3037,6 @@ export default function ChecklistClient({
                           (a as any)._orderIndex - (b as any)._orderIndex
                       );
 
-                    // Map tiap grup (item)
                     return orderedGroups.map((arr: any[]) => {
                       const leftParts = arr.filter(
                         (f: any) => (f.group_order ?? 0) !== 99
@@ -3197,7 +3055,6 @@ export default function ChecklistClient({
                           key={groupId}
                           className="rounded-xl border border-slate-200 p-4 md:p-5"
                         >
-                          {/* Toolbar judul + urutan per-grup */}
                           {canDesign && (
                             <div className="mb-3 flex items-center justify-between no-print">
                               <div className="text-sm font-semibold text-slate-800">
@@ -3223,7 +3080,6 @@ export default function ChecklistClient({
                           )}
 
                           <div className="md:grid md:grid-cols-[1fr_380px] gap-8">
-                            {/* LEFT: render semua field */}
                             <div className="flex flex-col gap-4">
                               {leftParts.map((f: any) => (
                                 <FieldInput
@@ -3234,10 +3090,18 @@ export default function ChecklistClient({
                                     form[sec.id]?.[(f as any).id] ??
                                     (String((f as any).type) === "invoice"
                                       ? []
+                                      : isPoDelay(f)
+                                      ? []
+                                      : isGridField(f)
+                                      ? [] // ✅
                                       : isMultiField(f)
                                       ? []
                                       : (f as any).type === "checkbox"
                                       ? []
+                                      : (f as any).type === "cycle_table"
+                                      ? ""
+                                      : (f as any).type === "image"
+                                      ? ""
                                       : (f as any).type === "number" ||
                                         (f as any).type === "currency"
                                       ? 0
@@ -3255,7 +3119,6 @@ export default function ChecklistClient({
                               ))}
                             </div>
 
-                            {/* RIGHT: Keterangan */}
                             <div className="mt-2 md:mt-0 md:self-center md:pl-10">
                               {notePart ? (
                                 String((notePart as any)?.type || "") ===
@@ -3337,7 +3200,6 @@ export default function ChecklistClient({
                   )}
                 </div>
 
-                {/* tombol simpan pindah ke atas (toolbar) */}
                 {lockedSec ? (
                   <div className="mt-6 text-xs text-slate-500">
                     Section ini terkunci pada tanggal ini.
@@ -3353,7 +3215,6 @@ export default function ChecklistClient({
         )}
       </div>
 
-      {/* PRINT */}
       {/* PRINT */}
       <div className="hidden print:block">
         <PrintModelPrincipal sections={sections} form={form} />
